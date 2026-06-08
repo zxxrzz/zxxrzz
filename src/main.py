@@ -153,6 +153,8 @@ def main(page: ft.Page):
                 start_btn.icon = ft.Icons.STOP
                 start_btn.bgcolor = "#ef4444"
                 
+                alerts_value.value = "0"
+                
                 refresh_thread = threading.Thread(target=refresh_data_loop, daemon=True)
                 refresh_thread.start()
                 
@@ -190,6 +192,35 @@ def main(page: ft.Page):
         
         unique_ips = len(stats['ip_traffic'])
         connections_value.value = str(unique_ips)
+        
+        alerts_value.value = str(stats.get('alert_count', 0))
+        
+        for alert in stats.get('new_alerts', []):
+            alert_type = alert.get('type', '')
+            alert_color = '#ef4444'
+            if alert_type == '频率异常':
+                alert_color = '#f59e0b'
+            elif alert_type == '端口扫描':
+                alert_color = '#ef4444'
+            elif alert_type == '非标准端口':
+                alert_color = '#f97316'
+            
+            log_list.controls.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Text(f"[{alert['time']}]", size=12, color="#94a3b8"),
+                            ft.Text(f"[{alert['type']}]", size=12, weight=ft.FontWeight.BOLD, color=alert_color),
+                            ft.Text(alert['message'], size=12, color="#e2e8f0"),
+                        ],
+                        spacing=10,
+                        wrap=True,
+                    ),
+                    padding=8,
+                    bgcolor="#1e293b",
+                    border_radius=6,
+                )
+            )
         
         in_data = [ft.LineChartDataPoint(i, v / 1024) for i, (t, v) in enumerate(stats['bytes_in_per_second'][-60:])]
         out_data = [ft.LineChartDataPoint(i, v / 1024) for i, (t, v) in enumerate(stats['bytes_out_per_second'][-60:])]

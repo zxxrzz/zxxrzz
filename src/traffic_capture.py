@@ -3,7 +3,7 @@ import time
 from scapy.all import sniff, get_if_list, conf
 from scapy.packet import Packet
 from collections import defaultdict, deque
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import socket
 import struct
 
@@ -24,6 +24,15 @@ class TrafficCapture:
         self.current_bytes_out = 0
         self.last_second = int(time.time())
         
+        self.ip_request_count: Dict[str, int] = defaultdict(int)
+        self.ip_ports_scanned: Dict[str, Set[int]] = defaultdict(set)
+        self.alerts: List[Dict] = []
+        self.alert_count = 0
+        
+        self.FREQUENCY_THRESHOLD = 100
+        self.SCAN_PORT_THRESHOLD = 20
+        self.STANDARD_PORTS = {21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 3306, 3389, 5432, 8080, 8443}
+        
     def get_interfaces(self) -> List[str]:
         return get_if_list()
     
@@ -40,6 +49,7 @@ class TrafficCapture:
                 self.bytes_out_per_second.append((self.last_second, self.current_bytes_out))
                 self.current_bytes_in = 0
                 self.current_bytes_out = 0
+                self.ip_request_count.clear()
                 self.last_second = current_second
             
             if packet.haslayer('IP'):
@@ -50,6 +60,20 @@ class TrafficCapture:
                 if dst_ip == local_ip:
                     self.current_bytes_in += packet_size
                     self.ip_traffic[src_ip] += packet_size
+                    
+                    self.ip_request_count[src_ip] += 1
+                    if self.ip_request_count[src_ip] == self.FREQUENCY_THRESHOLD:
+                        self._add_alert("频率异常", f"IP {src_ip} 请求频率超过 {self.FREQUENCY_THRESHOLD} 次/秒")
+                    
+                    if packet.haslayer('TCP'):
+                        dst_port = packet['TCP'].dport
+                        self.ip_ports_scanned[src_ip].add(dst_port)
+                        if len(self.ip_ports_scanned[src_ip]) == self.SCAN_PORT_THRESHOLD:
+                            self._add_alert("端口扫描", f"IP {src_ip} 扫描了 {len(self.ip_ports_scanned[src_ip])} 个端口")
+                        
+                        if dst_port not in self.STANDARD_PORTS and len(self.ip_ports_scanned[src_ip]) > 5:
+                            self._add_alert("非标准端口", f"IP {src_ip} 访问了非标准端口 {dst_port}")
+                
                 elif src_ip == local_ip:
                     self.current_bytes_out += packet_size
                     self.ip_traffic[dst_ip] += packet_size
@@ -62,6 +86,17 @@ class TrafficCapture:
                     self.protocol_count['ICMP'] += 1
                 else:
                     self.protocol_count['Other'] += 1
+    
+    def _add_alert(self, alert_type: str, message: str):
+        self.alert_count += 1
+        alert = {
+            "type": alert_type,
+            "message": message,
+            "time": time.strftime("%H:%M:%S")
+        }
+        self.alerts.append(alert)
+        if len(self.alerts) > 100:
+            self.alerts.pop(0)
     
     def _get_local_ip(self) -> str:
         try:
@@ -108,6 +143,9 @@ class TrafficCapture:
             total_in = sum(ts[1] for ts in self.bytes_in_per_second)
             total_out = sum(ts[1] for ts in self.bytes_out_per_second)
             
+            new_alerts = self.alerts.copy()
+            self.alerts.clear()
+            
             return {
                 'bytes_in_per_second': list(self.bytes_in_per_second),
                 'bytes_out_per_second': list(self.bytes_out_per_second),
@@ -116,7 +154,9 @@ class TrafficCapture:
                 'current_bytes_in': self.current_bytes_in,
                 'current_bytes_out': self.current_bytes_out,
                 'total_in': total_in,
-                'total_out': total_out
+                'total_out': total_out,
+                'alert_count': self.alert_count,
+                'new_alerts': new_alerts
             }
     
     def clear_stats(self):
@@ -128,3 +168,7 @@ class TrafficCapture:
             self.current_bytes_in = 0
             self.current_bytes_out = 0
             self.last_second = int(time.time())
+            self.ip_request_count.clear()
+            self.ip_ports_scanned.clear()
+            self.alerts.clear()
+            self.alert_count = 0
